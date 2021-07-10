@@ -1,0 +1,102 @@
+From cf9703d6cf1bfef02a9c77d50bfb985fb8d8f75d Mon Sep 17 00:00:00 2001
+From: Janmm14 <gitconfig1@janmm14.de>
+Date: Tue, 8 Jun 2021 12:04:40 +0200
+Subject: [PATCH] Use Java 8 lambda map access in EventBus
+
+Improves speed as HashMap doesn't have to calculate hash multiple times.
+
+diff --git a/event/src/main/java/net/md_5/bungee/event/EventBus.java b/event/src/main/java/net/md_5/bungee/event/EventBus.java
+index ac6b9758..1f6d780a 100644
+--- a/event/src/main/java/net/md_5/bungee/event/EventBus.java
++++ b/event/src/main/java/net/md_5/bungee/event/EventBus.java
+@@ -80,19 +80,11 @@ public class EventBus
+                     } );
+                     continue;
+                 }
+-                Map<Byte, Set<Method>> prioritiesMap = handler.get( params[0] );
+-                if ( prioritiesMap == null )
+-                {
+-                    prioritiesMap = new HashMap<>();
+-                    handler.put( params[0], prioritiesMap );
+-                }
+-                Set<Method> priority = prioritiesMap.get( annotation.priority() );
+-                if ( priority == null )
+-                {
+-                    priority = new HashSet<>();
+-                    prioritiesMap.put( annotation.priority(), priority );
+-                }
+-                priority.add( m );
++                // Waterfall start: Use Java 8 lambda map access in EventBus
++                handler.computeIfAbsent( params[ 0 ], k -> new HashMap<>() )
++                        .computeIfAbsent( annotation.priority(), k -> new HashSet<>() )
++                        .add( m );
++                // Waterfall end
+             }
+         }
+         return handler;
+@@ -106,22 +98,14 @@ public class EventBus
+         {
+             for ( Map.Entry<Class<?>, Map<Byte, Set<Method>>> e : handler.entrySet() )
+             {
+-                Map<Byte, Map<Object, Method[]>> prioritiesMap = byListenerAndPriority.get( e.getKey() );
+-                if ( prioritiesMap == null )
+-                {
+-                    prioritiesMap = new HashMap<>();
+-                    byListenerAndPriority.put( e.getKey(), prioritiesMap );
+-                }
++                // Waterfall start: Use Java 8 lambda map access in EventBus
++                Map<Byte, Map<Object, Method[]>> prioritiesMap = byListenerAndPriority.computeIfAbsent( e.getKey(), k -> new HashMap<>() );
+                 for ( Map.Entry<Byte, Set<Method>> entry : e.getValue().entrySet() )
+                 {
+-                    Map<Object, Method[]> currentPriorityMap = prioritiesMap.get( entry.getKey() );
+-                    if ( currentPriorityMap == null )
+-                    {
+-                        currentPriorityMap = new HashMap<>();
+-                        prioritiesMap.put( entry.getKey(), currentPriorityMap );
+-                    }
+-                    currentPriorityMap.put( listener, entry.getValue().toArray( new Method[ 0 ] ) );
++                    prioritiesMap.computeIfAbsent( entry.getKey(), k -> new HashMap<>() )
++                            .put( listener, entry.getValue().toArray( new Method[ 0 ] ) );
+                 }
++                // Waterfall end
+                 bakeHandlers( e.getKey() );
+             }
+         } finally
+@@ -138,26 +122,20 @@ public class EventBus
+         {
+             for ( Map.Entry<Class<?>, Map<Byte, Set<Method>>> e : handler.entrySet() )
+             {
+-                Map<Byte, Map<Object, Method[]>> prioritiesMap = byListenerAndPriority.get( e.getKey() );
+-                if ( prioritiesMap != null )
++                // Waterfall start: Use Java 8 lambda map access in EventBus
++                byListenerAndPriority.computeIfPresent( e.getKey(), ( clazz, prioritiesMap ) ->
+                 {
+                     for ( Byte priority : e.getValue().keySet() )
+                     {
+-                        Map<Object, Method[]> currentPriority = prioritiesMap.get( priority );
+-                        if ( currentPriority != null )
++                        prioritiesMap.computeIfPresent( priority, ( prio, currentPriority ) ->
+                         {
+                             currentPriority.remove( listener );
+-                            if ( currentPriority.isEmpty() )
+-                            {
+-                                prioritiesMap.remove( priority );
+-                            }
+-                        }
++                            return currentPriority.isEmpty() ? null : currentPriority;
++                        } );
+                     }
+-                    if ( prioritiesMap.isEmpty() )
+-                    {
+-                        byListenerAndPriority.remove( e.getKey() );
+-                    }
+-                }
++                    return prioritiesMap.isEmpty() ? null : prioritiesMap;
++                } );
++                // Waterfall end
+                 bakeHandlers( e.getKey() );
+             }
+         } finally
+-- 
+2.32.0.windows.1
+
